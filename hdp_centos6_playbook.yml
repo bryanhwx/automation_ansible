@@ -1,0 +1,110 @@
+---
+- hosts: all
+  user: bryan
+  sudo: True
+
+  vars:
+    hdp_ambari_repo: http://public-repo-1.hortonworks.com/ambari/centos6/2.x/updates/2.2.0.0/ambari.repo
+    ownhostname: one.hdp
+    own_ip: 192.168.0.93
+    ambarihostname: one.hdp
+
+  tasks:
+    - name: Install wget
+      yum:
+        pkg: wget
+        state: installed
+
+    - name: Install NTP
+      yum:
+        pkg: ntp
+        state: installed
+    
+    - name: Start NTP
+      service: name=ntpd state=running enabled=yes
+
+    - name: Stop iptables
+      service: name=iptables state=stopped enabled=no
+
+    - name: Stop iptables6
+      service: name=ip6tables state=stopped enabled=no
+      ignore_errors: yes
+
+    - name: If needed temporaly disable SELinux
+      shell: echo 0 > enforce
+      args:
+        chdir: /selinux
+        removes: enforce
+
+    - name: Install selinux-python
+      yum: pkg=libselinux-python state=installed
+
+    - name: Disable SElinux permanetly
+      lineinfile: dest=/etc/selinux/config state=present create=no regexp='SELINUX=.*' line='SELINUX=disabled'
+
+    - name: Disable Transparent Huge Pages (THP)
+      command: echo never > /sys/kernel/mm/transparent_hugepage/enabled && echo never > /sys/kernel/mm/transparent_hugepage/defrag
+
+    - name: Disable THP in /etc/rc.local (1)
+      lineinfile: dest=/etc/rc.local state=present create=yes regexp='.*transparent_hugepage\/defrag' line='if test -f /sys/kernel/mm/transparent_hugepage/defrag; then echo never > /sys/kernel/mm/transparent_hugepage/defrag ; fi' 
+
+    - name: Disable THP in /etc/rc.local (2)
+      lineinfile: dest=/etc/rc.local state=present create=yes regexp='.*transparent_hugepage\/enabled' line='if test -f /sys/kernel/mm/transparent_hugepage/enabled; then echo never > /sys/kernel/mm/transparent_hugepage/enabled ; fi' 
+
+    - name: Create hostname entry to {{ ownhostname }}
+      lineinfile: dest=/etc/hostname state=present create=yes regexp='.*' line='{{ ownhostname }}'
+
+    - name: Add entry to /etc/hosts to {{ ownhostname }}
+      lineinfile: dest=/etc/hosts state=present create=yes regexp='.*{{ ownhostname }}' line='{{ own_ip }} {{ ownhostname }}'
+
+    - name: Set networking yes
+      lineinfile: dest=/etc/sysconfig/network create=yes state=present regexp='NETWORKING=.*' line='NETWORKING=yes'
+
+    - name: Set hostname to {{ ownhostname }}
+      lineinfile: dest=/etc/sysconfig/network create=yes state=present regexp='HOSTNAME=.*' line='HOSTNAME={{ ownhostname }}'
+
+    - name: Restart networking
+      service: name=network state=restarted
+
+    - name: force the hostname
+      command:  /bin/hostname -f {{ ownhostname }}
+
+    - name: Create Ambari Repo {{ hdp_ambari_repo }}
+      command: wget {{ hdp_ambari_repo }} -O /etc/yum.repos.d/ambari.repo
+
+    - name: Clean YUM
+      command: yum clean all
+
+    - name: Install Ambari Agent
+      yum:
+        pkg: ambari-agent
+        state: installed
+
+    - name: Configure Ambari agent to register at Ambari server
+      lineinfile: dest=/etc/ambari-agent/conf/ambari-agent.ini create=no state=present regexp='hostname=.*' line='hostname={{ ambarihostname }}'
+
+    - name: Start Ambari Agent
+      service: name=ambari-agent state=running enabled=yes
+
+- hosts: ambari_host
+  user: bryan
+  sudo: True
+
+  tasks: 
+    - name: Install Ambari server
+      yum:
+        pkg: ambari-server
+        state: installed
+
+    - name: Configure Ambari server
+      command: ambari-server setup -s
+
+    - name: Start Ambari server - wait 10
+      command: sleep 10
+
+    - name: Start Ambari server for real
+      service: name=ambari-server state=running enabled=yes
+ 
+    - name: Restart the Ambari-Agent, just in case
+      service: name=ambari-agent state=restarted enabled=yes
+

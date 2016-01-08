@@ -1,0 +1,116 @@
+---
+- hosts: repository
+  user: bryan
+  sudo: True
+
+  vars:
+    ownhostname: repo.local
+    own_ip: 192.168.0.102
+    own_port: 44080
+    src_dir: /Users/bryan/ansible
+    ambari_tarball: ambari-2.2.0.0-centos6.tar.gz
+    ambari_pkg: ambari-2.2.0.0
+    hdp_utils_tarball: HDP-UTILS-1.1.0.20-centos6.tar.gz
+    hdp_utils_pkg: HDP-UTILS-1.1.0.20
+    hdp_tarball: HDP-2.3.4.0-centos6-rpm.tar.gz
+    hdp_pgk: HDP-2.3.4.0
+    nginx_webroot: /usr/share/nginx/html
+
+  tasks:
+    - name: Install wget
+      yum:
+        pkg: wget
+        state: installed
+
+    - name: Install NTP
+      yum:
+        pkg: ntp
+        state: installed
+    
+    - name: Start NTP
+      service: name=ntpd state=running enabled=yes
+
+    - name: Stop iptables
+      service: name=iptables state=stopped enabled=no
+
+    - name: Stop iptables6
+      service: name=ip6tables state=stopped enabled=no
+      ignore_errors: yes
+
+    - name: If needed temporaly disable SELinux
+      shell: echo 0 > enforce
+      args:
+        chdir: /selinux
+        removes: enforce
+
+    - name: Install selinux-python
+      yum: pkg=libselinux-python state=installed
+
+    - name: Disable SElinux permanetly
+      lineinfile: dest=/etc/selinux/config state=present create=no regexp='SELINUX=.*' line='SELINUX=disabled'
+
+    - name: Create hostname entry to {{ ownhostname }}
+      lineinfile: dest=/etc/hostname state=present create=yes regexp='.*' line='{{ ownhostname }}'
+
+    - name: Add entry to /etc/hosts to {{ ownhostname }}
+      lineinfile: dest=/etc/hosts state=present create=yes regexp='.*{{ ownhostname }}' line='{{ own_ip }} {{ ownhostname }}'
+
+    - name: Set networking yes
+      lineinfile: dest=/etc/sysconfig/network create=yes state=present regexp='NETWORKING=.*' line='NETWORKING=yes'
+
+    - name: Set hostname to {{ ownhostname }}
+      lineinfile: dest=/etc/sysconfig/network create=yes state=present regexp='HOSTNAME=.*' line='HOSTNAME={{ ownhostname }}'
+
+    - name: Restart networking
+      service: name=network state=restarted
+      ignore_errors: yes
+
+    - name: force the hostname
+      command:  /bin/hostname -f {{ ownhostname }}
+
+    - name: Copy Nginx repo file
+      copy: src={{src_dir}}/nginx.repo dest=/etc/yum.repos.d/nginx.repo owner=root group=root mode=0644
+
+    - name: Install Nginx
+      yum: pkg=nginx state=installed
+
+    - name: Configure Nginx to use port 44080
+      lineinfile: dest=/etc/nginx/conf.d/default.conf create=no state=present regexp='^\s+listen\s+.*80;' line='     listen      {{ own_port }};'
+
+    - name: Start Nginx
+      service: name=nginx state=restarted  enabled=yes
+
+    - name: Check for Nginx serving base index.html
+      get_url: url=http://{{ own_ip }}:{{ own_port}}/index.html  dest=/var/tmp/index.html
+
+# Would check for sufficient disk space here (roughly 8G, but could generalize to the size of files to transfer)
+
+    - name: Copy ambari tarball to the server
+      copy: src={{ src_dir }}/{{ ambari_tarball }} dest=/var/tmp owner=root group=root mode=0644
+
+    - name: Copy HDP_UTILS tarball to the server
+      copy: src={{ src_dir }}/{{ hdp_utils_tarball }} dest=/var/tmp owner=root group=root mode=0644
+
+    - name: Copy HDP tarball to the server
+      copy: src={{ src_dir }}/{{ hdp_tarball }} dest=/var/tmp owner=root group=root mode=0644
+
+    - name: Untar Ambari tarball to {{ nginx_webroot }}
+      command: tar xzf /var/tmp/{{ ambari_tarball }} chdir={{ nginx_webroot }} creates={{ nginx_webroot }}/ambari-2.2.0.0
+
+    - name: Check for setup_repo.sh file 
+      get_url: url=http://{{ own_ip }}:{{ own_port}}/ambari-2.2.0.0/setup_repo.sh dest=/dev/null
+
+    - name: create hdp directory in webserver root
+      file: path={{ nginx_webroot }}/hdp state=directory mode=0755
+
+    - name: Untar HDP_UTILS into webserver.root/hdp
+      command: tar xzf /var/tmp/{{ hdp_utils_tarball }} chdir={{ nginx_webroot }}/hdp creates={{ nginx_webroot }}/hdp/HDP_UTILS-1.1.0.20
+
+    - name: Check for well-known HDP_UTILS file
+      get_url: url=http://{{ own_ip }}:{{ own_port}}/hdp/HDP-UTILS-1.1.0.20/repos/centos6/repodata/repomd.xml dest=/dev/null
+
+    - name: Untar HDP into webserver.root/hdp
+      command: tar xzf /var/tmp/{{ hdp_tarball }} chdir={{ nginx_webroot }}/hdp creates={{ nginx_webroot }}/hdp/HDP
+
+    - name: Check for well-known HDP file
+      get_url: url=http://{{ own_ip }}:{{ own_port}}/hdp/HDP/centos6/2.x/updates/2.3.4.0/repodata/repomd.xml dest=/dev/null
