@@ -1,0 +1,48 @@
+---
+- hosts: all
+  user: avoma
+  sudo: True
+
+  vars:
+    HADOOPCONFDIR: /etc/hadoop/conf 
+
+  tasks:
+    - name: stop hadoop-datanode
+      action: shell su -l hdfs -c "/usr/hdp/2.3.4.0-3485/hadoop/sbin/hadoop-daemon.sh --config HADOOPCONFDIR stop datanode"
+
+    - name: stop nodemanager
+      action: shell su -l yarn -c "/usr/hdp/current/hadoop-yarn-nodemanager/sbin/yarn-daemon.sh --config HADOOPCONFDIR stop nodemanager"
+    
+    - name: stop regionserver
+      action: shell su -l hbase -c "/usr/hdp/current/hbase-regionserver/bin/hbase-daemon.sh stop regionserver"
+
+## 
+    - name: 'Reboot Hostname'
+      action: shell /sbin/shutdown -r
+
+    - name: install docker-io
+      yum: name=docker-io state=installed
+      async: 1000
+      poll: 0
+      register: sh
+  
+    - name: 'Waiting for reboot to finish'
+      async_status: jid={{ sh.ansible_job_id }}
+      register: wait_result
+      until: sh.finished
+      retries: 30
+  
+## step 3
+    - name: 'ping test'
+      action: shell /bin/echo hello
+      action: ping
+  
+    - name: start hadoop-datanode
+      action: shell su -l hdfs -c "/usr/hdp/2.3.4.0-3485/hadoop/sbin/hadoop-daemon.sh --config HADOOPCONFDIR start datanode"
+      
+    - name: start nodemanager 
+      action: shell su -l yarn -c "/usr/hdp/current/hadoop-yarn-nodemanager/sbin/yarn-daemon.sh --config HADOOPCONFDIR start nodemanager"
+
+    - name: start regionserver
+      action: shell su -l hbase -c "/usr/hdp/current/hbase-regionserver/bin/hbase-daemon.sh start regionserver"
+
